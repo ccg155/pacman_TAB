@@ -11,18 +11,20 @@
 # Student side autograding was added by Brad Miller, Nick Hay, and
 # Pieter Abbeel (pabbeel@cs.berkeley.edu).
 
+from game import Agent
+from pacman import GameState
+from game import Grid
+from util import Queue
 import torch
 import numpy as np
 from net import PacmanNet
 import os
 from util import manhattanDistance
 from game import Directions
-import random, util
+import random
+import util
 random.seed(42)  # For reproducibility
-from game import Agent
-from pacman import GameState
-from game import Grid
-from util import Queue
+
 
 class ReflexAgent(Agent):
     """
@@ -219,7 +221,6 @@ class NeuralAgent(Agent):
         # Daniel y Crespo
         ####################################################################
         self.heatmap = None
-        self.frame = 0
 
         print(f"NeuralAgent inicializado, usando dispositivo: {self.device}")
 
@@ -324,7 +325,7 @@ class NeuralAgent(Agent):
         # Daniel y Crespo
         ####################################################################
         layout = state.getWalls()
-        
+
         if self.heatmap is None:
             ghost_positions = []
             for g in ghost_states:
@@ -334,17 +335,18 @@ class NeuralAgent(Agent):
 
         # Factor X: No entrar a la habitación incial de los fantasmas
         print(self.heatmap)
-        
+
         # Factor 1: Distancia a la comida más cercana
         if food:
-            min_food_distance = min(manhattanDistance(pacman_pos, food_pos) for food_pos in food)
-            score += 5.0 / (min_food_distance + 1)
-        
+            min_food_distance = min(manhattanDistance(pacman_pos, food_pos)
+                                    for food_pos in food)
+            score += 1.0 / (min_food_distance + 1)
+
         # Factor 2: Proximidad a fantasmas
         for ghost_state in ghost_states:
             ghost_pos = ghost_state.getPosition()
             ghost_distance = manhattanDistance(pacman_pos, ghost_pos)
-            
+
             if ghost_state.scaredTimer > 0:
                 #############################################################
                 # Daniel y Crespo
@@ -446,6 +448,7 @@ class NeuralAgent(Agent):
         # Devolver la mejor acción
         return successors[0][0]
 
+
 # Definir una función para crear el agente
 def createNeuralAgent(model_path="models/pacman_model.pth"):
     """
@@ -460,6 +463,10 @@ def createNeuralAgent(model_path="models/pacman_model.pth"):
 
 
 def collectIntersections(layout: Grid) -> list[tuple[int, int]]:
+    """
+    Returns a list with the position of all the intersections in the map
+    An intersection being a path with 3 or more movement possibilities
+    """
     height = layout.height
     width = layout.width
 
@@ -479,43 +486,19 @@ def collectIntersections(layout: Grid) -> list[tuple[int, int]]:
                 # going to exceed the limits
                 if not layout[nx][ny]:
                     neighbors += 1
-            
+
             if neighbors >= 3:
                 intersections.append((x, y))
     return intersections
 
 
-def createHeatMap(layout: Grid, ghost_position: list[tuple]):
-    width = layout.width
-    height = layout.height
-    intersections = collectIntersections(layout)
-
-    # We implement a BFS from every intersection
-    heatmap = np.full((width, height), -1)
-    queue = Queue()
-
-    for x, y in intersections:
-        heatmap[x][y] = 0
-        queue.push((x, y, 0))  # x, y, distanceToIntersection
-
-    while not queue.isEmpty():
-        x, y, dist = queue.pop()
-        ndist = dist + 1
-
-        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
-            nx = x + dx
-            ny = y + dy
-
-            if not layout[nx][ny] and heatmap[nx][ny] == -1:
-                heatmap[nx][ny] = ndist
-                queue.push((nx, ny, ndist))
-
-    heatmap = initialCage(ghost_position, heatmap, layout)
-
-    return heatmap
-
-
 def initialCage(ghost_positions, heatmap, layout):
+    """
+    Locates the initial cage or home of the ghost. Every classical pacman
+    map has a box or cage where the ghosts start and does not contain food
+    and generally is a death sentence.
+    """
+
     queue = Queue()
     visited = set()
 
@@ -548,7 +531,7 @@ def initialCage(ghost_positions, heatmap, layout):
 
                 # If the neighbour of nx, ny is touching the exterior,
                 # we do not expand further
-                if heatmap[Nx][Ny] > 0 and heatmap[Nx][Ny] < 1000:
+                if heatmap[Nx][Ny] > 1 and heatmap[Nx][Ny] < 1000:
                     is_exit = True
                     break
 
@@ -561,3 +544,37 @@ def initialCage(ghost_positions, heatmap, layout):
 
     return heatmap
 
+
+def createHeatMap(layout: Grid, ghost_position: list[tuple]):
+    """
+    Creates a heatmap with the level of danger of the tiles, this level being
+    calculated by how far the tile is from an intersection. The intersections
+    count as safe places because you can always scape from ghosts.
+    """
+    width = layout.width
+    height = layout.height
+    intersections = collectIntersections(layout)
+
+    # We implement a BFS from every intersection
+    heatmap = np.full((width, height), -1)
+    queue = Queue()
+
+    for x, y in intersections:
+        heatmap[x][y] = 1  # 1 == safe
+        queue.push((x, y, 1))  # x, y, distanceToIntersection
+
+    while not queue.isEmpty():
+        x, y, dist = queue.pop()
+        ndist = dist + 1
+
+        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            nx = x + dx
+            ny = y + dy
+
+            if not layout[nx][ny] and heatmap[nx][ny] == -1:
+                heatmap[nx][ny] = ndist
+                queue.push((nx, ny, ndist))
+
+    heatmap = initialCage(ghost_position, heatmap, layout)
+
+    return heatmap
