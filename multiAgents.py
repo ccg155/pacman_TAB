@@ -330,6 +330,7 @@ class NeuralAgent(Agent):
         height = layout.height
         width = layout.width
 
+        # We create the heatmap only one time, as it is fixed
         if self.heatmap is None:
             ghost_positions = []
             for g in ghost_states:
@@ -337,17 +338,24 @@ class NeuralAgent(Agent):
                 ghost_positions.append((int(x), int(y)))
             self.heatmap = createHeatMap(layout, ghost_positions)
 
-        # print(self.heatmap, end="\n======================================\n")
+        # We make it local to add our heuristics
+        heatmap = deepcopy(self.heatmap)
 
         # Factor 1: Distancia a la comida más cercana
         # Replaced manhattan distances by a sense of smell as the former would
         # bypass walls and trick pacman
-        heatmap = deepcopy(self.heatmap)
-
         if food:
-            PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap)
+            if not PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap):
+                # If there is no more food left in the smell radius,
+                # we enable a long-range search, similar to the original factor
+                # but amping up the effect.
+                min_food_distance = min(manhattanDistance(pacman_pos, food_pos)
+                                        for food_pos in food)
+                score += 150 / (min_food_distance + 1)
 
         # Factor 2: Proximidad a fantasmas
+        # Replaced by a heat footprint that follows the ghosts and better
+        # represent the dangerous level relative to pacman using a bfs strategy
         for ghost_state in ghost_states:
             ghost_pos = ghost_state.getPosition()
             ghost_distance = manhattanDistance(pacman_pos, ghost_pos)
@@ -356,25 +364,25 @@ class NeuralAgent(Agent):
                 # Si el fantasma está asustado, ir a por él
                 score += 50 / (ghost_distance + 1)
 
+            # We activate it moments before ghost activation to avoid
+            # pacman running into them when they are going to return back
             elif ghost_state.scaredTimer > 37:
                 updateGhostHeatMap(ghost_pos, layout, 3, 1000, heatmap)
 
             else:
                 # Si no está asustado, evitarlo
-                #############################################################
-                # Daniel y Crespo
-                #############################################################
                 updateGhostHeatMap(ghost_pos, layout, 3, 1000, heatmap)
-                #print(ghost_hm, end="\n#######################################################\n\n")
 
-        # Factor 3: HeatMap
+        # HeatMap
+        # We implement the heatmap, containing both the amplified versions,
+        # onto the score
         x, y = int(pacman_pos[0]), int(pacman_pos[1])
         score += heatmap[x][y]
 
         heatmap[x, y] = 0
         for x in range(width):
             for y in range(height):
-                if heatmap[x, y] == -9999:
+                if heatmap[x, y] == -99999:
                     heatmap[x, y] = 9
         print(heatmap, end=f"\n==============={self.frame}==================\n\n")
         self.frame += 1
@@ -511,7 +519,7 @@ def initialCage(ghost_positions, heatmap, layout):
     map has a box or cage where the ghosts start and does not contain food
     and generally is a death sentence.
     """
-    CAGE_POINTS = -9999
+    CAGE_POINTS = -99999
     queue = Queue()
     visited = set()
 
@@ -594,6 +602,9 @@ def createHeatMap(layout: Grid, ghost_position: list[tuple]):
 
 
 def circle(cx: int, cy: int, radio: int) -> list[tuple]:
+    """
+    Collects the points that form a circle with a certain radius and center
+    """
     points = []
     r2 = radio**2
 
@@ -606,6 +617,9 @@ def circle(cx: int, cy: int, radio: int) -> list[tuple]:
 
 
 def bfsSmell(layout, max_dist, food, px, py) -> list[tuple]:
+    """
+    Returns the shortest path between a piece of food and pacman's position
+    """
 
     fx, fy = int(food[0]), int(food[1])
     queue = Queue()
@@ -635,6 +649,14 @@ def bfsSmell(layout, max_dist, food, px, py) -> list[tuple]:
 def PacmanSmell(p_pos: tuple, layout: Grid, food_pos: list,
                 max_dist: int, fruit_points: int, smell_hm):
 
+    """
+    Updates the heatmap to incorporate the smell of the closest food using
+    a bfs strategy for every food in the circle and then selecting the best
+    score for each cell
+
+    This hard-sets the heatmap to the score, so this must be the first
+    heuristic to apply
+    """
     px, py = int(p_pos[0]), int(p_pos[1])
 
     food_dict = {}
@@ -643,19 +665,27 @@ def PacmanSmell(p_pos: tuple, layout: Grid, food_pos: list,
     for p in smell_area:
         if p in food_pos:
             bfs_path = bfsSmell(layout, max_dist, p, px, py)
-            l = len(bfs_path)
+            length = len(bfs_path)
             for x, y, d in bfs_path:
-                points = fruit_points * (l - d) / l
+                points = fruit_points * (length - d) / length
                 food_dict[(x, y)] = (points if (x, y) not in food_dict
                                      else max(points, food_dict[(x, y)]))
-        
+
     for pos, points in food_dict.items():
         smell_hm[pos] = points
+    
+    return True if food_dict else False
 
 
 def updateGhostHeatMap(g_pos: tuple, layout: Grid, max_dist: int,
                        scare_points: int, ghost_hm):
 
+    """
+    Updates the heatmap to add the heat footprint of the ghosts. This footprint
+    is just a bfs starting at the ghost position.
+
+    This is a soft addition to the heatmap, so it can be done at any point.
+    """
     gx, gy = int(g_pos[0]), int(g_pos[1])
 
     queue = Queue()
