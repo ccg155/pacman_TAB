@@ -688,6 +688,7 @@ class NeuralAgent(Agent):
         # Replaced manhattan distances by a sense of smell as the former would
         # bypass walls and trick pacman
         if food:
+            # We "hammer in nails" to pacman if he does not pickup food
             score -= 150 * len(food)
             PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap)
 
