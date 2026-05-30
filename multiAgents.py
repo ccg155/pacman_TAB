@@ -439,13 +439,8 @@ class AlphaBetaAgent(MultiAgentSearchAgent):
         # Replaced manhattan distances by a sense of smell as the former would
         # bypass walls and trick pacman
         if food:
-            if not PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap):
-                # If there is no more food left in the smell radius,
-                # we enable a long-range search, similar to the original factor
-                # but amping up the effect.
-                min_food_distance = min(manhattanDistance(pacman_pos, food_pos)
-                                        for food_pos in food)
-                score += 150 / (min_food_distance + 1)
+            score -= 150 * len(food)
+            PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap)
 
         # Factor 2: Proximidad a fantasmas
         # Replaced by a heat footprint that follows the ghosts and better
@@ -473,6 +468,12 @@ class AlphaBetaAgent(MultiAgentSearchAgent):
         x, y = int(pacman_pos[0]), int(pacman_pos[1])
         score += heatmap[x][y]
 
+        if state.isLose():
+            score -= 10000
+
+        if state.isWin():
+            score += 10000
+
         return score
     
     def neural_evaluation(self, state):
@@ -492,7 +493,7 @@ class AlphaBetaAgent(MultiAgentSearchAgent):
         for i, action in self.idx_to_action.items():
             if action in legal_actions:
                 if action == Directions.STOP and len(legal_actions) > 1:
-                    neural_score -= probabilities[i] * 200
+                    neural_score -= probabilities[i] * 500
                 neural_score += probabilities[i] * 100
 
         return neural_score
@@ -670,6 +671,7 @@ class NeuralAgent(Agent):
         layout = state.getWalls()
         height = layout.height
         width = layout.width
+        px, py = int(pacman_pos[0]), int(pacman_pos[1])
 
         # We create the heatmap only one time, as it is fixed
         if self.heatmap is None:
@@ -686,13 +688,8 @@ class NeuralAgent(Agent):
         # Replaced manhattan distances by a sense of smell as the former would
         # bypass walls and trick pacman
         if food:
-            if not PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap):
-                # If there is no more food left in the smell radius,
-                # we enable a long-range search, similar to the original factor
-                # but amping up the effect.
-                min_food_distance = min(manhattanDistance(pacman_pos, food_pos)
-                                        for food_pos in food)
-                score += 150 / (min_food_distance + 1)
+            score -= 150 * len(food)
+            PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap)
 
         # Factor 2: Proximidad a fantasmas
         # Replaced by a heat footprint that follows the ghosts and better
@@ -717,16 +714,18 @@ class NeuralAgent(Agent):
         # HeatMap
         # We implement the heatmap, containing both the amplified versions,
         # onto the score
-        x, y = int(pacman_pos[0]), int(pacman_pos[1])
-        score += heatmap[x][y]
+        score += heatmap[px][py]
 
-        heatmap[x, y] = 0
+        """
+        # VISUALITATION PURPOSES
+        heatmap[px, py] = 0
         for x in range(width):
             for y in range(height):
                 if heatmap[x, y] == -99999:
                     heatmap[x, y] = 9
         print(heatmap, end=f"\n==============={self.frame}==================\n\n")
         self.frame += 1
+        """
 
         # Combinar la puntuación de la red con la heurística
         neural_score = 0
@@ -736,9 +735,15 @@ class NeuralAgent(Agent):
                 # Daniel y Crespo
                 #############################################################
                 if action == Directions.STOP:
-                    score -= probabilities[i] * 200
+                    neural_score -= probabilities[i] * 500
 
                 neural_score += probabilities[i] * 100
+
+        if state.isLose():
+            score -= 10000
+
+        if state.isWin():
+            score += 10000
 
         return score + neural_score
 
@@ -1001,6 +1006,9 @@ def PacmanSmell(p_pos: tuple, layout: Grid, food_pos: list,
     px, py = int(p_pos[0]), int(p_pos[1])
 
     food_dict = {}
+    # If there is little food, we amp up massively the smell senses of pacman
+    if len(food_pos) <= 15:
+        max_dist = 100
 
     smell_area = circle(px, py, max_dist)
     for p in smell_area:
