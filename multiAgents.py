@@ -222,6 +222,7 @@ class NeuralAgent(Agent):
         # Daniel y Crespo
         ####################################################################
         self.heatmap = None
+        self.frame = 0
 
         print(f"NeuralAgent inicializado, usando dispositivo: {self.device}")
 
@@ -336,16 +337,15 @@ class NeuralAgent(Agent):
                 ghost_positions.append((int(x), int(y)))
             self.heatmap = createHeatMap(layout, ghost_positions)
 
-        # Factor X: No entrar a la habitación incial de los fantasmas
-        print(self.heatmap, end="\n========================================\n")
+        # print(self.heatmap, end="\n======================================\n")
 
         # Factor 1: Distancia a la comida más cercana
-        if food:
-            min_food_distance = min(manhattanDistance(pacman_pos, food_pos)
-                                    for food_pos in food)
-            score += 30.0 / (min_food_distance + 1)
+        # Replaced manhattan distances by a sense of smell as the former would
+        # bypass walls and trick pacman
+        heatmap = deepcopy(self.heatmap)
 
-        ghost_hm = deepcopy(self.heatmap)
+        if food:
+            PacmanSmell(pacman_pos, layout, food, 5, 100, heatmap)
 
         # Factor 2: Proximidad a fantasmas
         for ghost_state in ghost_states:
@@ -353,24 +353,31 @@ class NeuralAgent(Agent):
             ghost_distance = manhattanDistance(pacman_pos, ghost_pos)
 
             if ghost_state.scaredTimer > 0:
+                # Si el fantasma está asustado, ir a por él
+                score += 50 / (ghost_distance + 1)
+
+            elif ghost_state.scaredTimer > 37:
+                updateGhostHeatMap(ghost_pos, layout, 3, 1000, heatmap)
+
+            else:
+                # Si no está asustado, evitarlo
                 #############################################################
                 # Daniel y Crespo
                 #############################################################
-                # Si el fantasma está asustado, ir a por él
-                score += 50 / (ghost_distance + 1)
-            else:
-                # Si no está asustado, evitarlo
-                if ghost_distance <= 2:
-                    score -= 200  # Gran penalización por estar demasiado cerca
-            #############################################################
-            # Daniel y Crespo
-            #############################################################
-                updateGhostHeatMap(ghost_pos, layout, 3, 1000, ghost_hm)
-                print(ghost_hm, end="\n#######################################################\n\n")
+                updateGhostHeatMap(ghost_pos, layout, 3, 1000, heatmap)
+                #print(ghost_hm, end="\n#######################################################\n\n")
 
         # Factor 3: HeatMap
         x, y = int(pacman_pos[0]), int(pacman_pos[1])
-        score -= ghost_hm[x][y]
+        score += heatmap[x][y]
+
+        heatmap[x, y] = 0
+        for x in range(width):
+            for y in range(height):
+                if heatmap[x, y] == -9999:
+                    heatmap[x, y] = 9
+        print(heatmap, end=f"\n==============={self.frame}==================\n\n")
+        self.frame += 1
 
         # Combinar la puntuación de la red con la heurística
         neural_score = 0
@@ -504,7 +511,7 @@ def initialCage(ghost_positions, heatmap, layout):
     map has a box or cage where the ghosts start and does not contain food
     and generally is a death sentence.
     """
-    CAGE_POINTS = 99999
+    CAGE_POINTS = -9999
     queue = Queue()
     visited = set()
 
@@ -537,7 +544,7 @@ def initialCage(ghost_positions, heatmap, layout):
 
                 # If the neighbour of nx, ny is touching the exterior,
                 # we do not expand further
-                if heatmap[Nx][Ny] > 1 and heatmap[Nx][Ny] < CAGE_POINTS:
+                if heatmap[Nx][Ny] > 1 and heatmap[Nx][Ny] > CAGE_POINTS:
                     is_exit = True
                     break
 
@@ -598,6 +605,54 @@ def circle(cx: int, cy: int, radio: int) -> list[tuple]:
     return points
 
 
+def bfsSmell(layout, max_dist, food, px, py) -> list[tuple]:
+
+    fx, fy = int(food[0]), int(food[1])
+    queue = Queue()
+    queue.push((fx, fy, 0, [(fx, fy, 0)]))
+    visited = {(fx, fy)}
+    
+    while not queue.isEmpty():
+        x, y, d, p = queue.pop()
+        nd = d + 1
+
+        if nd > 2*max_dist:
+            continue
+
+        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            nx = x + dx
+            ny = y + dy
+
+            if not layout[nx][ny] and (nx, ny) not in visited:
+                if (nx, ny) == (px, py):
+                    return p + [(nx, ny, nd)]
+                queue.push((nx, ny, nd, p + [(nx, ny, nd)]))
+            visited.add((nx, ny))
+
+    return []
+
+
+def PacmanSmell(p_pos: tuple, layout: Grid, food_pos: list,
+                max_dist: int, fruit_points: int, smell_hm):
+
+    px, py = int(p_pos[0]), int(p_pos[1])
+
+    food_dict = {}
+
+    smell_area = circle(px, py, max_dist)
+    for p in smell_area:
+        if p in food_pos:
+            bfs_path = bfsSmell(layout, max_dist, p, px, py)
+            l = len(bfs_path)
+            for x, y, d in bfs_path:
+                points = fruit_points * (l - d) / l
+                food_dict[(x, y)] = (points if (x, y) not in food_dict
+                                     else max(points, food_dict[(x, y)]))
+        
+    for pos, points in food_dict.items():
+        smell_hm[pos] = points
+
+
 def updateGhostHeatMap(g_pos: tuple, layout: Grid, max_dist: int,
                        scare_points: int, ghost_hm):
 
@@ -606,7 +661,7 @@ def updateGhostHeatMap(g_pos: tuple, layout: Grid, max_dist: int,
     queue = Queue()
 
     queue.push((gx, gy, 0))
-    ghost_hm[gx][gy] += scare_points
+    ghost_hm[gx][gy] -= scare_points
     visited = {(gx, gy)}
 
     while not queue.isEmpty():
@@ -622,7 +677,7 @@ def updateGhostHeatMap(g_pos: tuple, layout: Grid, max_dist: int,
 
             if not layout[nx][ny] and (nx, ny) not in visited:
                 center_distance = int(manhattanDistance((nx, ny), (gx, gy)))
-                ghost_hm[nx][ny] += scare_points / (center_distance + 1)
+                ghost_hm[nx][ny] -= scare_points / (center_distance + 1)
                 queue.push((nx, ny, nd))
-            
+ 
             visited.add((nx, ny))
